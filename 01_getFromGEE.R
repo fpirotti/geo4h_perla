@@ -1,7 +1,6 @@
 library(rgee)
 library(rgeeExtra)
 
-bufferDistance <- 1000L
 
 # ee_Initialize(quiet = T)
 ee_Initialize(user = 'cirgeo' )
@@ -12,7 +11,9 @@ googledrive::drive_auth(email="cirgeo@unipd.it")
 
 
 downloadGDrive <- function(task_vector, outpath="./perla.json"){
-  gd_folder <- basename(ee$batch$Task$status(task_vector)[["destination_uris"]])
+  bv <- ee$batch$Task$status(task_vector)
+
+  gd_folder <- basename(bv[["destination_uris"]])
   gd_ExportOptions <- task_vector[["config"]][["fileExportOptions"]]
   gd_filename <- gd_ExportOptions[["driveDestination"]][["filenamePrefix"]]
   files_gd <- try(googledrive::drive_find(q = sprintf("'%s' in parents",
@@ -23,8 +24,10 @@ downloadGDrive <- function(task_vector, outpath="./perla.json"){
     user_input <- readline( sprintf("Are you sure you want to overwrite path %s? (y/n)  ", outpath ))
     if(user_input != 'y') stop('Exiting since you did not press y')
   }
-  googledrive::drive_download(file = files_gd , path =outpath, overwrite = TRUE)
-
+  if(nrow(files_gd)>1){
+    warning("%d files found, will only download the first one!",  )
+  }
+  googledrive::drive_download(file = files_gd[1,] , path =outpath, overwrite = TRUE)
 }
 
 getCentroids <- ee_utils_pyfunc(function(feature) {
@@ -37,14 +40,39 @@ bufferPoly <- ee_utils_pyfunc(function(feature) {
   feature$buffer(bufferDistance)
 })
 
+join_filter <- ee$Filter$equals(
+   leftField= 'system:index',
+  rightField= 'system:index'
+)
+
+simpleJoin <- ee$Join$inner()
+
+
+
 
 ### GRAB THE DATA -----
 padova <-
   ee$FeatureCollection("projects/ee-perlarivadeneyra/assets/Padova_Vigonovo_corrected_WGS89")
+
+
+bufferDistance <- 1000L
 cases <-
   ee$FeatureCollection("projects/ee-perlarivadeneyra/assets/cases_geocoded_with_ARCGIS_HERE")$map(bufferPoly)
 controls <-
   ee$FeatureCollection("projects/ee-perlarivadeneyra/assets/controls_geocoded_with_ARCGIS_HERE")$map(bufferPoly)
+
+## here we buffer 2 km to make sure to catch cloud and cloud shadows
+## ... since we add to previous buffer, we have to get the new buffer distance
+## from the margin of the buffer area
+if(bufferDistance < 2000L){
+  bufferDistance <- 2000L - bufferDistance
+  cases4clouds <- cases$map(bufferPoly)
+  controls4clouds  <-  controls$map(bufferPoly)
+} else {
+  cases4clouds <- cases
+  controls4clouds  <-  controls
+}
+
 
 l1 <- ee$ImageCollection("LANDSAT/LM01/C02/T2")$filterBounds(padova)
 l2 <- ee$ImageCollection("LANDSAT/LM02/C02/T2")$filterBounds(padova)
@@ -53,16 +81,15 @@ l3 <- ee$ImageCollection("LANDSAT/LM03/C02/T2")$filterBounds(padova)
 # l1 <- ee$ImageCollection("LANDSAT/LM01/C02/T1")$filterBounds(padova)
 # l2 <- ee$ImageCollection("LANDSAT/LM02/C02/T1")$filterBounds(padova)
 # l3 <- ee$ImageCollection("LANDSAT/LM03/C02/T1")$filterBounds(padova)
-l5 <-
-  ee$ImageCollection("LANDSAT/LT05/C02/T1_TOA")$filterBounds(padova)
-l7 <-
-  ee$ImageCollection("LANDSAT/LE07/C02/T1_TOA")$filterBounds(padova)
+l5 <- ee$ImageCollection("LANDSAT/LT05/C02/T1_TOA")$filterBounds(padova)
+l7 <- ee$ImageCollection("LANDSAT/LE07/C02/T1_TOA")$filterBounds(padova)
 # l8 <- ee$ImageCollection("LANDSAT/LC08/C02/T1_L2")$filterBounds(padova)
 
 
 ### function to do things for the stack of yearly imagery
 
 processYear <- ee_utils_pyfunc(function(year) {
+
   getNDVI  <-    ee_utils_pyfunc(function(image) {
     nirb <-  image$select(nir)
     redb <-  image$select(red)
@@ -73,40 +100,50 @@ processYear <- ee_utils_pyfunc(function(year) {
 
     fin <-
       ee$Image(
-        nirb$subtract(redb)$divide(nirb$add(redb))$addBands(ee$Image(1))$rename('NDVI', "Ncells")
+        nirb$subtract(redb)$divide(nirb$add(redb))$addBands(ee$Image(1))$rename('NDVI', "NDVIcells")
       )
 
     fin <- fin$updateMask(fin$select("NDVI")$gt(0L))
 
-    ff <- fin$reduceRegions(
-      collection = controls,
-      #$filter(ee$Filter$eq('codice', 'berval')),
-      reducer = ee$Reducer$sum(),
+    ff <- fin$select("NDVI")$reduceRegions(
+      collection = controls, #$filter(ee$Filter$eq('codice', 'berval')),
+      reducer = ee$Reducer$sum()$setOutputs( list("NDVIsum") ),
       scale = 30L
     )
 
-    ff <- fin$select("NDVI")$rename("stdDevNDVI")$reduceRegions(
-      collection = ff,
-      reducer = ee$Reducer$stdDev(),
+    ff <- fin$reduceRegions(
+      collection = ff, # $filter(ee$Filter$eq('codice', 'berval')),
+      reducer = ee$Reducer$count()$setOutputs( list("NDVIcells") ),
       scale = 30L
     )
-    ff <-
-      ee$Image(cloud)$addBands(ee$Image(1))$rename('Clouds', "NCloudCells")$reduceRegions(
-        collection = ff,
+    ff <- fin$select("NDVI")$reduceRegions(
+      collection = ff,
+      reducer = ee$Reducer$stdDev()$setOutputs( list("NDVIstdDev") ),
+      scale = 30L
+    )
+
+    ff_clouds <-
+      ee$Image(cloud)$addBands(ee$Image(1))$rename('NCellsWithClouds', "NTotCells")$reduceRegions(
+        collection = controls4clouds,
         reducer = ee$Reducer$sum(),
         scale = 30L
       )
 
-    ff$map(ee_utils_pyfunc(function(ff) {
-      ff <-
-        ff$set(
+    ffJoined <- simpleJoin$apply(ff, ff_clouds, join_filter);
+
+    ffJoined$map(ee_utils_pyfunc(function(ffIn) {
+
+      newf <- ee$Feature(ffIn$get('primary'))$copyProperties(ffIn$get('secondary'), list('NCellsWithClouds', "NTotCells" ));
+      newf <-
+        newf$set(
           list(
-            "Date" = ee$Image(image)$date()$format('YYYY-MM-dd'),
+            "Sensor" =  ee$Image(image)$id()$slice(2,4),
             "Timestamp" = ee$Image(image)$date()$format('YYYY-MM-dd HH:mm:ss'),
             "Path" = ee$Image(image)$get('WRS_PATH'),
             "Row" = ee$Image(image)$get('WRS_ROW')
           )
         )
+      ee$Feature(newf)$setGeometry(NULL)
     }))
 
 
@@ -125,7 +162,8 @@ processYear <- ee_utils_pyfunc(function(year) {
     )$map(getNDVI)$flatten()
 
 
-  l1.fd$filter(ee$Filter$gt('stdDev', 0))$filter(ee$Filter$lt('Clouds', 1))
+   l1.fd
+   #$filter(ee$Filter$gt('stdDev', 0))$filter(ee$Filter$lt('Clouds', 1))
 
 })
 
@@ -148,7 +186,9 @@ ee_monitoring(task_vector) # optional
 downloadGDrive(task_vector)
 
 all <- jsonlite::read_json("perla.json")
+
 df <- na.omit( data.table::rbindlist(lapply(all$features, function(x) {
+
   x$properties
 }), fill = TRUE) )
 
