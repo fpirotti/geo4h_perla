@@ -107,9 +107,49 @@ processYear <- ee_utils_pyfunc(function(year) {
         nirb$subtract(redb)$divide(nirb$add(redb))$rename('NDVI')
       )
 
-    fin <- fin$updateMask(fin$select("NDVI")$gt(0L))$updateMask(cloud$Not() )$updateMask(noRefl$Not() )
+    fin <- fin$updateMask(fin$select("NDVI")$gt(0L))$updateMask(cloud$Not() )$updateMask(noRelf$Not() )
 
-    return(fin)
+    ff <- fin$select("NDVI")$reduceRegions(
+      collection = controls, #$filter(ee$Filter$eq('codice', 'berval')),
+      reducer = ee$Reducer$sum()$setOutputs( list("NDVIsum") ),
+      scale = 30L
+    )
+
+    ff <- fin$reduceRegions(
+      collection = ff, # $filter(ee$Filter$eq('codice', 'berval')),
+      reducer = ee$Reducer$count()$setOutputs( list("NDVIcells") ),
+      scale = 30L
+    )
+    ff <- fin$select("NDVI")$reduceRegions(
+      collection = ff,
+      reducer = ee$Reducer$stdDev()$setOutputs( list("NDVIstdDev") ),
+      scale = 30L
+    )
+
+    ff_clouds <-
+      ee$Image(cloud)$addBands(ee$Image(1))$rename('CloudsNCellsWithClouds', "CloudsNTotCells")$reduceRegions(
+        collection = controls4clouds,
+        reducer = ee$Reducer$sum(),
+        scale = 30L
+      )
+
+    ffJoined <- simpleJoin$apply(ff, ff_clouds, join_filter);
+
+    ffJoined$map(ee_utils_pyfunc(function(ffIn) {
+
+      newf <- ee$Feature(ffIn$get('primary'))$copyProperties(ffIn$get('secondary'), list('CloudsNCellsWithClouds', "CloudsNTotCells" ));
+      newf <-
+        newf$set(
+          list(
+            "Sensor" =  ee$Image(image)$id()$slice(2,4),
+            "Timestamp" = ee$Image(image)$date()$format('YYYY-MM-dd HH:mm:ss'),
+            "Path" = ee$Image(image)$get('WRS_PATH'),
+            "Row" = ee$Image(image)$get('WRS_ROW')
+          )
+        )
+      ee$Feature(newf)$setGeometry(NULL)
+    }))
+
 
   })
 
@@ -118,25 +158,24 @@ processYear <- ee_utils_pyfunc(function(year) {
   red <- ee$String("B5")
   qaBand <- ee$String("QA_PIXEL")
 
-  date <- ee$Date(sprintf("%d-01-01", year) )
 
   l1.fd <-
     l1$filterDate(
       ee$Number(year)$format("%d")$cat('-03-21'),
       ee$Number(year)$format("%d")$cat('-10-21')
-    )$map(getNDVI)$max()$set('system:time_start', date$millis())
+    )$map(getNDVI)$flatten()
 
   l2.fd <-
     l2$filterDate(
       ee$Number(year)$format("%d")$cat('-03-21'),
       ee$Number(year)$format("%d")$cat('-10-21')
-    )$map(getNDVI)$max()$set('system:time_start', date$millis())
+    )$map(getNDVI)$flatten()
 
   l3.fd <-
     l3$filterDate(
       ee$Number(year)$format("%d")$cat('-03-21'),
       ee$Number(year)$format("%d")$cat('-10-21')
-    )$map(getNDVI)$max()$set('system:time_start', date$millis())
+    )$map(getNDVI)$flatten()
 #
 #    ll.final <- l1.fd$merge(l2.fd)$merge(l3.fd)
 #    ll.final
@@ -149,28 +188,24 @@ processYear <- ee_utils_pyfunc(function(year) {
      l5$filterDate(
        ee$Number(year)$format("%d")$cat('-03-21'),
        ee$Number(year)$format("%d")$cat('-10-21')
-     )$map(getNDVI)$max()$set('system:time_start', date$millis())
+     )$map(getNDVI)$flatten()
 
 
    l7.fd <-
      l7$filterDate(
        ee$Number(year)$format("%d")$cat('-03-21'),
        ee$Number(year)$format("%d")$cat('-10-21')
-     )$map(getNDVI)$max()$set('system:time_start', date$millis())
+     )$map(getNDVI)$flatten()
 
    l8.fd <-
      l8$filterDate(
        ee$Number(year)$format("%d")$cat('-03-21'),
        ee$Number(year)$format("%d")$cat('-10-21')
-     )$map(getNDVI)$max()$set('system:time_start', date$millis())
+     )$map(getNDVI)$flatten()
 
 
-
-   ll.final <- ee$ImageCollection(list(l1.fd,l2.fd,l3.fd,
-                                  l5.fd,l7.fd,l8.fd) )$max() #l1.fd$merge(l2.fd)#$merge(l3.fd)$merge(l5.fd)$merge(l7.fd)$merge(l8.fd)
-
-   im <- ee$Image(ll.final)
-   return()
+   ll.final <- l1.fd$merge(l2.fd)$merge(l3.fd)$merge(l5.fd)$merge(l7.fd)$merge(l8.fd)
+   ll.final
 
    #$filter(ee$Filter$gt('stdDev', 0))$filter(ee$Filter$lt('Clouds', 1))
 
@@ -178,59 +213,10 @@ processYear <- ee_utils_pyfunc(function(year) {
 
 
 
-  from <- 1972
-    to <- 1977
-  # ndviStack <-  ee$ImageCollection(  ee$FeatureCollection( ee$List$sequence(from, to)$map(processYear)  )$flatten() )$toBands()
-  ndviStack <-  ee$ImageCollection(   ee$List$sequence(from, to)$map(processYear)    )#$toBands()
-  ndviStack$getInfo()
-  ndviStack <-  ndviStack$rename( sprintf("NDVI%d", from:to) )
+from <- 1972
+  to <- 2020
+ndviStack <- ee$FeatureCollection( ee$List$sequence(from, to)$map(processYear) )$flatten()
 
-
-  ff <- ndviStack$reduceRegions(
-    collection = controls, #$filter(ee$Filter$eq('codice', 'berval')),
-    reducer = ee$Reducer$sum(),
-    scale = 30L
-  )
-
-  ff$getInfo()
-
-  ff <- fin$reduceRegions(
-    collection = ff, # $filter(ee$Filter$eq('codice', 'berval')),
-    reducer = ee$Reducer$count()$setOutputs( list("NDVIcells") ),
-    scale = 30L
-  )
-  ff <- fin$select("NDVI")$reduceRegions(
-    collection = ff,
-    reducer = ee$Reducer$stdDev()$setOutputs( list("NDVIstdDev") ),
-    scale = 30L
-  )
-
-  ff_clouds <-
-    ee$Image(cloud)$addBands(ee$Image(1))$rename('CloudsNCellsWithClouds', "CloudsNTotCells")$reduceRegions(
-      collection = controls4clouds,
-      reducer = ee$Reducer$sum(),
-      scale = 30L
-    )
-
-  ffJoined <- simpleJoin$apply(ff, ff_clouds, join_filter);
-
-  ffJoined$map(ee_utils_pyfunc(function(ffIn) {
-
-    newf <- ee$Feature(ffIn$get('primary'))$copyProperties(ffIn$get('secondary'), list('CloudsNCellsWithClouds', "CloudsNTotCells" ));
-    newf <-
-      newf$set(
-        list(
-          "Sensor" =  ee$Image(image)$id()$slice(2,4),
-          "Timestamp" = ee$Image(image)$date()$format('YYYY-MM-dd HH:mm:ss'),
-          "Path" = ee$Image(image)$get('WRS_PATH'),
-          "Row" = ee$Image(image)$get('WRS_ROW')
-        )
-      )
-    ee$Feature(newf)$setGeometry(NULL)
-  }))
-
-
-ndviStack$first()$getInfo()
 
 task_vector <- ee_table_to_drive(
   collection = ndviStack,
