@@ -12,6 +12,6 @@ E.g. values of counts of the valid cells with NDVI (no clouds) available in the 
 
 ![](images/clipboard-3103987508.png) 
 
-Spatial aggregation:
+**Spatial aggregation:**
 
 ![](images/clipboard-2439958054.png) 
