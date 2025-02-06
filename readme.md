@@ -10,6 +10,8 @@ E.g. values of counts of the valid cells with NDVI (no clouds) available in the 
 
 **Temporal aggregation:**
 
-![](images/clipboard-3103987508.png)Spatial aggregation:
+![](images/clipboard-3103987508.png){width="533"}
 
-![](images/clipboard-2439958054.png)
+Spatial aggregation:
+
+![](images/clipboard-2439958054.png){width="422"}
