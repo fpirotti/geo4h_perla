@@ -291,10 +291,6 @@ processLCollection <- ee_utils_pyfunc(function(landsatMissionCollection) {
  # l8te <- ecdf(l8t)
 
  ######### FINISHED -------------
- ######### FINISHED -------------
- ######### FINISHED -------------
- ######### FINISHED -------------
-
 
 
 
